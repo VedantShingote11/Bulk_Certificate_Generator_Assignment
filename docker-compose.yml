@@ -1,0 +1,61 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: certificates_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  api:
+    build: ./backend
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      - ./backend:/app
+      - cert_files:/app/app/static/certificates
+    ports:
+      - "8000:8000"
+    env_file: ./backend/.env
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:password@db:5432/certificates_db
+      SYNC_DATABASE_URL: postgresql+psycopg://postgres:password@db:5432/certificates_db
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  worker:
+    build: ./backend
+    command: celery -A app.workers.celery_app worker --loglevel=info
+    volumes:
+      - ./backend:/app
+      - cert_files:/app/app/static/certificates
+    env_file: ./backend/.env
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:password@db:5432/certificates_db
+      SYNC_DATABASE_URL: postgresql+psycopg://postgres:password@db:5432/certificates_db
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      - api
+      - redis
+
+volumes:
+  pgdata:
+  cert_files:
